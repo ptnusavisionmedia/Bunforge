@@ -47,6 +47,7 @@ type SceneProps = {
   reducedMotion: boolean
   isMobile: boolean
   onUnavailable: () => void
+  onSceneReady?: () => void
 }
 
 type PlacedLayer = Layer & { y: number }
@@ -779,6 +780,8 @@ export default function BurgerScene(props: SceneProps) {
   const { layers, exploded, reducedMotion, isMobile, assemblyKey, cameraCommand, onUnavailable } = props
   const [ready, setReady] = useState(false)
   const onReady = useCallback(() => setReady(true), [])
+  const { onSceneReady } = props
+  useEffect(() => { if (ready) onSceneReady?.() }, [ready, onSceneReady])
   const { placed, height } = useMemo(() => {
     let y = 0
     const gap = exploded ? EXPLODED_GAP : 0

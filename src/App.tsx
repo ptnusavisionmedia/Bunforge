@@ -124,6 +124,8 @@ export default function App() {
   const [assemblyKey, setAssemblyKey] = useState(0)
   const [cameraCommand, setCameraCommand] = useState<CameraCommand | null>(null)
   const [unavailable, setUnavailable] = useState(false)
+  const announceReady = useCallback(() => { window.dispatchEvent(new Event('bunforge:ready')) }, [])
+  useEffect(() => { if (unavailable) announceReady() }, [unavailable, announceReady])
   const [copied, setCopied] = useState<CopyState>('idle')
   const [storageWorks, setStorageWorks] = useState(true)
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
@@ -440,7 +442,7 @@ export default function App() {
               <Suspense fallback={<PreviewLoading />}>
                 <BurgerScene layers={layers} selectedId={highlightId} onSelect={selectFromScene}
                   exploded={exploded} cameraCommand={cameraCommand} assemblyKey={assemblyKey}
-                  reducedMotion={reducedMotion} isMobile={isMobile} onUnavailable={selectUnavailable} />
+                  reducedMotion={reducedMotion} isMobile={isMobile} onUnavailable={selectUnavailable} onSceneReady={announceReady} />
               </Suspense>
             )}
           </div>
