@@ -41,20 +41,15 @@ function useMediaQuery(query: string) {
   return matches
 }
 
-const PHOTO_WIDTHS = [240, 400, 640] as const
-const TILE_SIZES = '(max-width: 639px) 30vw, (max-width: 1023px) 22vw, 190px'
-
-function IngredientPhoto({ id, sizes = TILE_SIZES, priority = false }: { id: BunId | FillingId; sizes?: string; priority?: boolean }) {
+function IngredientPhoto({ id }: { id: BunId | FillingId }) {
   return (
     <img
       className="ingredient-photo"
-      src={`/ingredients/${id}-400.webp`}
-      srcSet={PHOTO_WIDTHS.map((width) => `/ingredients/${id}-${width}.webp ${width}w`).join(', ')}
-      sizes={sizes}
+      src={`/ingredients/${id}.jpg`}
       alt=""
-      width={400}
-      height={400}
-      loading={priority ? 'eager' : 'lazy'}
+      width={640}
+      height={640}
+      loading="lazy"
       decoding="async"
     />
   )
@@ -561,7 +556,7 @@ export default function App() {
                       <button type="button" className="tile" data-chosen={chosen || undefined} aria-pressed={isBun ? chosen : undefined}
                         aria-label={label} onClick={(event) => chooseIngredient(item.id, event)}>
                         <span className="tile-photo">
-                          <IngredientPhoto id={item.id} sizes="48px" />
+                          <IngredientPhoto id={item.id} />
                           {count > 0 && (
                             <span className="tile-count" key={pulse?.id === item.id ? pulse.serial : 'count'} data-pulse={pulse?.id === item.id || undefined} aria-hidden="true">
                               {count}
