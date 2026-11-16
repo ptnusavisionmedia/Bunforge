@@ -11,7 +11,9 @@ import {
 } from './burger'
 import type { BunId, FillingId, PresetId } from './burger'
 
-const BurgerScene = lazy(() => import('./BurgerScene'))
+// Unduh kode scene lebih awal; pemasangannya menunggu intro loading screen selesai
+const sceneChunk = import('./BurgerScene')
+const BurgerScene = lazy(() => sceneChunk)
 
 type Category = (typeof categories)[number]
 type Tab = 'ingredients' | 'stack'
@@ -124,6 +126,14 @@ export default function App() {
   const [assemblyKey, setAssemblyKey] = useState(0)
   const [cameraCommand, setCameraCommand] = useState<CameraCommand | null>(null)
   const [unavailable, setUnavailable] = useState(false)
+  const [sceneGate, setSceneGate] = useState(() => !document.getElementById('splash'))
+  useEffect(() => {
+    if (sceneGate) return
+    const open = () => setSceneGate(true)
+    window.addEventListener('bunforge:intro', open, { once: true })
+    const fallback = window.setTimeout(open, 3200)
+    return () => { window.removeEventListener('bunforge:intro', open); window.clearTimeout(fallback) }
+  }, [sceneGate])
   const announceReady = useCallback(() => { window.dispatchEvent(new Event('bunforge:ready')) }, [])
   useEffect(() => { if (unavailable) announceReady() }, [unavailable, announceReady])
   const [copied, setCopied] = useState<CopyState>('idle')
@@ -438,6 +448,8 @@ export default function App() {
           >
             {unavailable ? (
               <FlatPreview layers={layers} bun={draft.bun} exploded={exploded} selectedId={highlightId} onSelect={selectFromScene} />
+            ) : !sceneGate ? (
+              <PreviewLoading />
             ) : (
               <Suspense fallback={<PreviewLoading />}>
                 <BurgerScene layers={layers} selectedId={highlightId} onSelect={selectFromScene}
