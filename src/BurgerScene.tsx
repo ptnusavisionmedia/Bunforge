@@ -1,5 +1,4 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
-import { Environment, Lightformer } from '@react-three/drei'
 import {
   Component,
   memo,
@@ -13,7 +12,9 @@ import {
 } from 'react'
 import {
   AdditiveBlending,
+  Color,
   DataTexture,
+  DoubleSide,
   DirectionalLight,
   Group,
   InstancedMesh,
@@ -21,10 +22,14 @@ import {
   LinearMipmapLinearFilter,
   MathUtils,
   Mesh,
+  MeshBasicMaterial,
   Object3D,
   PerspectiveCamera,
+  PlaneGeometry,
+  PMREMGenerator,
   RepeatWrapping,
   RGBAFormat,
+  Scene,
   ShaderMaterial,
   Vector3,
 } from 'three'
@@ -98,6 +103,7 @@ function CameraRig({
   reducedMotion: boolean
 }) {
   const { camera, size, gl, invalidate } = useThree()
+  const performance = useThree((state) => state.performance)
   // Lift the look-at point a little so the burger sits below the stage title, with air around it.
   const targetY = height / 2 - 0.21 + (isMobile ? 0.12 : 0.34)
   const aspect = size.width / Math.max(size.height, 1)
@@ -169,6 +175,7 @@ function CameraRig({
       const travel = horizontalOnly ? Math.abs(dx) : Math.hypot(dx, dy)
       if (!active.moved && travel < 4) return
       active = { id: active.id, x: event.clientX, y: event.clientY, moved: true }
+      performance.regress() // turunkan resolusi sementara saat memutar, kembali tajam setelah berhenti
       const controls = cameraState.current
       controls.azimuth -= dx * 0.011
       if (!horizontalOnly) {
@@ -194,7 +201,7 @@ function CameraRig({
       canvas.removeEventListener('pointerup', finishDrag)
       canvas.removeEventListener('pointercancel', finishDrag)
     }
-  }, [gl, invalidate, isMobile])
+  }, [gl, invalidate, isMobile, performance])
 
   useFrame((_, delta) => {
     const controls = cameraState.current
@@ -700,14 +707,46 @@ function Embers({ assemblyKey, isMobile }: { assemblyKey: number; isMobile: bool
   )
 }
 
+// Tiga panel cahaya studio, dipanggang sekali ke peta lingkungan (tanpa library tambahan)
+const STUDIO_PANELS: ReadonlyArray<readonly [color: string, intensity: number, position: readonly [number, number, number], size: readonly [number, number]]> = [
+  ['#ffe9d3', 1.8, [-3, 4, 2], [3.7, 2.4]],
+  ['#f8f2de', 0.82, [3, 2, 2], [2, 2]],
+  ['#ffd27a', 2.1, [0, 2, -4], [4, 2]],
+]
+
 const StudioEnvironment = memo(function StudioEnvironment() {
-  return (
-    <Environment resolution={64} frames={1} environmentIntensity={0.55}>
-      <Lightformer color="#ffe9d3" intensity={1.8} position={[-3, 4, 2]} scale={[3.7, 2.4, 1]} target={[0, 0, 0]} />
-      <Lightformer color="#f8f2de" intensity={0.82} position={[3, 2, 2]} scale={[2, 2, 1]} target={[0, 0, 0]} />
-      <Lightformer color="#ffd27a" intensity={2.1} position={[0, 2, -4]} scale={[4, 2, 1]} target={[0, 0, 0]} />
-    </Environment>
-  )
+  const gl = useThree((state) => state.gl)
+  const scene = useThree((state) => state.scene)
+  const invalidate = useThree((state) => state.invalidate)
+
+  useEffect(() => {
+    const studio = new Scene()
+    const geometry = new PlaneGeometry(1, 1)
+    const materials: MeshBasicMaterial[] = []
+    for (const [color, intensity, position, size] of STUDIO_PANELS) {
+      const material = new MeshBasicMaterial({ color: new Color(color).multiplyScalar(intensity), side: DoubleSide, toneMapped: false })
+      const panel = new Mesh(geometry, material)
+      panel.position.set(...position)
+      panel.scale.set(size[0], size[1], 1)
+      panel.lookAt(0, 0, 0)
+      studio.add(panel)
+      materials.push(material)
+    }
+    const generator = new PMREMGenerator(gl)
+    const target = generator.fromScene(studio, 0, 0.1, 100, { size: 128 })
+    scene.environment = target.texture
+    scene.environmentIntensity = 0.55
+    invalidate()
+    return () => {
+      scene.environment = null
+      target.dispose()
+      generator.dispose()
+      geometry.dispose()
+      materials.forEach((material) => material.dispose())
+    }
+  }, [gl, scene, invalidate])
+
+  return null
 })
 
 function Lighting({ isMobile, height }: { isMobile: boolean; height: number }) {
@@ -799,7 +838,8 @@ export default function BurgerScene(props: SceneProps) {
         <Canvas
           shadows
           frameloop="demand"
-          dpr={isMobile ? [1, 1.35] : [1, 1.8]}
+          dpr={isMobile ? [1, 1.25] : [1, 1.6]}
+          performance={{ min: 0.62, max: 1, debounce: 220 }}
           camera={{ fov: FOV, near: 0.1, far: 220, position: [2.6, 2.7, 6.5] }}
           gl={{ alpha: true, antialias: !isMobile, powerPreference: 'high-performance' }}
           aria-label="Model burger interaktif"
