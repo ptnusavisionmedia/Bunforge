@@ -420,7 +420,7 @@ function Ingredient({
       {selected && !exiting && (
         <mesh position={[0, Math.min(item.height * 0.6, 0.18), 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <torusGeometry args={[1.34, 0.01, 6, 72]} />
-          <meshBasicMaterial color="#ff8b51" transparent opacity={0.76} depthWrite={false} />
+          <meshBasicMaterial color="#ffc63d" transparent opacity={0.76} depthWrite={false} />
         </mesh>
       )}
     </group>
@@ -548,7 +548,7 @@ const glowFragment = /* glsl */ `
   void main() {
     float radius = length(uvPosition - vec2(0.5));
     float glow = (1.0 - smoothstep(0.12, 0.50, radius)) * 0.25;
-    gl_FragColor = vec4(0.63, 0.23, 0.08, glow);
+    gl_FragColor = vec4(0.30, 0.78, 0.68, glow);
   }
 `
 
@@ -583,28 +583,28 @@ function GrillStage() {
       </mesh>
       <mesh receiveShadow position={[0, -0.235, 0]}>
         <cylinderGeometry args={[1.84, 1.69, 0.24, 100]} />
-        <meshStandardMaterial color="#231a16" roughness={0.83} metalness={0.32} bumpMap={bumpMap} bumpScale={0.032} />
+        <meshStandardMaterial color="#0f2f2d" roughness={0.83} metalness={0.32} bumpMap={bumpMap} bumpScale={0.032} />
       </mesh>
       <mesh receiveShadow position={[0, -0.13, 0]}>
         <cylinderGeometry args={[1.86, 1.89, 0.078, 100]} />
-        <meshStandardMaterial color="#39312b" roughness={0.71} metalness={0.44} bumpMap={bumpMap} bumpScale={0.022} />
+        <meshStandardMaterial color="#2c4f4a" roughness={0.71} metalness={0.44} bumpMap={bumpMap} bumpScale={0.022} />
       </mesh>
       <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.081, 0]}>
         <circleGeometry args={[1.77, 100]} />
-        <meshStandardMaterial color="#27211e" roughness={0.89} metalness={0.27} bumpMap={bumpMap} bumpScale={0.029} />
+        <meshStandardMaterial color="#143735" roughness={0.89} metalness={0.27} bumpMap={bumpMap} bumpScale={0.029} />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.084, 0]}>
         <torusGeometry args={[1.798, 0.031, 9, 100]} />
-        <meshStandardMaterial color="#4b362d" roughness={0.57} metalness={0.53} />
+        <meshStandardMaterial color="#3f6862" roughness={0.57} metalness={0.53} />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.245, 0]}>
         <torusGeometry args={[1.799, 0.012, 7, 100]} />
-        <meshStandardMaterial color="#965439" emissive="#4a1405" emissiveIntensity={0.29} roughness={0.54} metalness={0.52} />
+        <meshStandardMaterial color="#3f8a7e" emissive="#0b3a33" emissiveIntensity={0.29} roughness={0.54} metalness={0.52} />
       </mesh>
       <group rotation={[0, -0.21, 0]}>
         <instancedMesh ref={ribsRef} args={[undefined, undefined, grillRibs.length]} receiveShadow>
           <boxGeometry args={[0.099, 0.075, 1]} />
-          <meshStandardMaterial color="#37302b" roughness={0.78} metalness={0.44} bumpMap={bumpMap} bumpScale={0.021} />
+          <meshStandardMaterial color="#28514c" roughness={0.78} metalness={0.44} bumpMap={bumpMap} bumpScale={0.021} />
         </instancedMesh>
       </group>
     </group>
@@ -704,7 +704,7 @@ const StudioEnvironment = memo(function StudioEnvironment() {
     <Environment resolution={64} frames={1} environmentIntensity={0.55}>
       <Lightformer color="#ffe9d3" intensity={1.8} position={[-3, 4, 2]} scale={[3.7, 2.4, 1]} target={[0, 0, 0]} />
       <Lightformer color="#f8f2de" intensity={0.82} position={[3, 2, 2]} scale={[2, 2, 1]} target={[0, 0, 0]} />
-      <Lightformer color="#ff8248" intensity={2.1} position={[0, 2, -4]} scale={[4, 2, 1]} target={[0, 0, 0]} />
+      <Lightformer color="#ffd27a" intensity={2.1} position={[0, 2, -4]} scale={[4, 2, 1]} target={[0, 0, 0]} />
     </Environment>
   )
 })
@@ -719,7 +719,7 @@ function Lighting({ isMobile, height }: { isMobile: boolean; height: number }) {
 
   return (
     <>
-      <hemisphereLight args={['#fff3e0', '#5f3f32', 1.45]} />
+      <hemisphereLight args={['#fff3e0', '#2f5a55', 1.45]} />
       <directionalLight
         ref={keyLight}
         position={[-4.4, lightHeight, 3.7]}
@@ -736,7 +736,7 @@ function Lighting({ isMobile, height }: { isMobile: boolean; height: number }) {
         shadow-normalBias={0.016}
       />
       <directionalLight position={[3.4, 2.5, 4.5]} color="#fff8ef" intensity={0.89} />
-      <pointLight position={[1.3, 2.1, -3]} color="#ff6d33" intensity={18.5} distance={9} decay={2} />
+      <pointLight position={[1.3, 2.1, -3]} color="#ffc86b" intensity={18.5} distance={9} decay={2} />
       <StudioEnvironment />
     </>
   )
