@@ -41,8 +41,8 @@ function useMediaQuery(query: string) {
   return matches
 }
 
-const PHOTO_WIDTHS = [400, 640] as const
-const TILE_SIZES = '(max-width: 639px) 33vw, (max-width: 1023px) 25vw, 200px'
+const PHOTO_WIDTHS = [240, 400, 640] as const
+const TILE_SIZES = '(max-width: 639px) 30vw, (max-width: 1023px) 22vw, 190px'
 
 function IngredientPhoto({ id, sizes = TILE_SIZES, priority = false }: { id: BunId | FillingId; sizes?: string; priority?: boolean }) {
   return (
