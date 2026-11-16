@@ -13,14 +13,6 @@ import type { BunId, FillingId, PresetId } from './burger'
 
 const BurgerScene = lazy(() => import('./BurgerScene'))
 
-const thumbnailIds = [
-  'brioche', 'sesame', 'potato', 'smash', 'beef',
-  'chicken', 'mushroom-patty', 'cheddar', 'mozzarella', 'pepper-jack',
-  'lettuce', 'tomato', 'pickle', 'onion', 'jalapeno',
-  'burger-sauce', 'bbq', 'spicy-mayo', 'cheese-sauce', 'fried-onion',
-  'grilled-mushroom', 'egg',
-]
-
 type Category = (typeof categories)[number]
 type Tab = 'ingredients' | 'stack'
 /** Visual placement in the list, which is drawn top-of-burger first. */
@@ -47,17 +39,18 @@ function useMediaQuery(query: string) {
   return matches
 }
 
-function spriteVars(id: string, color: string): Record<string, string> {
-  const index = thumbnailIds.indexOf(id)
-  return {
-    '--sprite-x': `${Math.max(index % 5, 0) * 25}%`,
-    '--sprite-y': `${Math.max(Math.floor(index / 5), 0) * 25}%`,
-    '--ingredient-color': color,
-  }
-}
-
-function IngredientPhoto({ id, color, className = '' }: { id: string; color: string; className?: string }) {
-  return <span aria-hidden="true" className={`ingredient-photo ${className}`} style={spriteVars(id, color) as CSSProperties} />
+function IngredientPhoto({ id }: { id: BunId | FillingId }) {
+  return (
+    <img
+      className="ingredient-photo"
+      src={`/ingredients/${id}.jpg`}
+      alt=""
+      width={640}
+      height={640}
+      loading="lazy"
+      decoding="async"
+    />
+  )
 }
 
 function getLayerDetails(ingredientId: string, bun: BunId) {
@@ -300,17 +293,18 @@ export default function App() {
   }
 
   /** Toss a copy of the ingredient photo onto the grill, so adding reads as one gesture. */
-  function flyToStage(source: HTMLElement | null, id: string, color: string) {
+  function flyToStage(source: HTMLImageElement | null) {
     const stage = stageRef.current
-    if (!source || !stage || reducedMotion) return
+    if (!source?.naturalWidth || !stage || reducedMotion) return
     const from = source.getBoundingClientRect()
     const to = stage.getBoundingClientRect()
     if (to.bottom < 40 || to.top > window.innerHeight - 40) return
     const size = Math.min(from.width, 96)
-    const ghost = document.createElement('span')
+    const ghost = document.createElement('img')
     ghost.className = 'ingredient-photo fly-ghost'
     ghost.setAttribute('aria-hidden', 'true')
-    for (const [key, value] of Object.entries(spriteVars(id, color))) ghost.style.setProperty(key, value)
+    ghost.src = source.currentSrc || source.src
+    ghost.alt = ''
     ghost.style.width = `${size}px`
     ghost.style.left = `${from.left + (from.width - size) / 2}px`
     ghost.style.top = `${from.top + (from.height - size) / 2}px`
@@ -330,19 +324,19 @@ export default function App() {
   }
 
   function chooseIngredient(id: BunId | FillingId, event: ReactMouseEvent<HTMLButtonElement>) {
-    const photo = event.currentTarget.querySelector<HTMLElement>('.ingredient-photo')
+    const photo = event.currentTarget.querySelector<HTMLImageElement>('.ingredient-photo')
     if (category === 'bun') {
       if (draft.bun === id) return
       const bun = buns[id as BunId]
       dispatch({ type: 'bun', bun: id as BunId })
-      flyToStage(photo, id, bun.color)
+      flyToStage(photo)
       setAddNotice({ id: Date.now(), text: `${bun.label} dipakai` })
       return
     }
     const ingredient = fillings[id as FillingId]
     const nextCount = (counts.get(id) ?? 0) + 1
     dispatch({ type: 'add', layer: { id: newLayerId(), ingredientId: id as FillingId } })
-    flyToStage(photo, id, ingredient.color)
+    flyToStage(photo)
     setPulse((previous) => ({ id, serial: (previous?.serial ?? 0) + 1 }))
     setAddNotice({ id: Date.now(), text: nextCount > 1 ? `${ingredient.label} ditambahkan, sekarang ${nextCount}` : `${ingredient.label} ditambahkan` })
   }
@@ -548,7 +542,7 @@ export default function App() {
                       <button type="button" className="tile" data-chosen={chosen || undefined} aria-pressed={isBun ? chosen : undefined}
                         aria-label={label} onClick={(event) => chooseIngredient(item.id, event)}>
                         <span className="tile-photo">
-                          <IngredientPhoto id={item.id} color={item.color} />
+                          <IngredientPhoto id={item.id} />
                           {count > 0 && (
                             <span className="tile-count" key={pulse?.id === item.id ? pulse.serial : 'count'} data-pulse={pulse?.id === item.id || undefined} aria-hidden="true">
                               {count}
@@ -621,7 +615,7 @@ export default function App() {
                           aria-pressed={selected} onClick={() => setSelection(selected ? null : layer.id)}
                           onFocus={() => setHoverId(layer.id)} onBlur={() => setHoverId(null)}
                           aria-label={`${ingredient.label}${isBun ? (isTop ? ', roti atas' : ', roti bawah') : `, lapisan ${position + 1}`}${selected ? ', disorot' : ''}`}>
-                          <IngredientPhoto id={ingredient.id} color={ingredient.color} />
+                          <IngredientPhoto id={ingredient.id} />
                           <span className="layer-name">
                             {ingredient.label}
                             {isBun && <small>{isTop ? 'Roti atas' : 'Roti bawah'}</small>}
