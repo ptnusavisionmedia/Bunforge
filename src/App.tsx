@@ -1,5 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react'
-import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
+import type { CSSProperties, KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent } from 'react'
 import {
   ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, Copy, GripVertical, Layers, Minus, Plus,
   Redo2, RotateCcw, ScanSearch, Trash2, Undo2,
@@ -28,7 +28,7 @@ type DropTarget = { id: string; side: 'above' | 'below' }
 type LayerDrag = { id: string; pointerId: number; startY: number }
 type SceneLayers = ReturnType<typeof getSceneLayers>
 type CopyState = 'idle' | 'copied' | 'error'
-type Notice = { id: number; text: string; undoable?: boolean }
+type Notice = { id: number; text: string }
 type PendingFocus = { id: string; control: 'up' | 'down' | 'select' } | { id: null; control: 'list' }
 
 function newLayerId() {
@@ -37,7 +37,6 @@ function newLayerId() {
 
 function useMediaQuery(query: string) {
   const [matches, setMatches] = useState(() => window.matchMedia(query).matches)
-
   useEffect(() => {
     const media = window.matchMedia(query)
     const sync = () => setMatches(media.matches)
@@ -45,23 +44,38 @@ function useMediaQuery(query: string) {
     media.addEventListener('change', sync)
     return () => media.removeEventListener('change', sync)
   }, [query])
-
   return matches
 }
 
-function IngredientPhoto({ id, color, className = '' }: { id: string; color: string; className?: string }) {
+function spriteVars(id: string, color: string): Record<string, string> {
   const index = thumbnailIds.indexOf(id)
-  const style = {
+  return {
     '--sprite-x': `${Math.max(index % 5, 0) * 25}%`,
     '--sprite-y': `${Math.max(Math.floor(index / 5), 0) * 25}%`,
     '--ingredient-color': color,
-  } as CSSProperties
+  }
+}
 
-  return <span aria-hidden="true" className={`ingredient-photo ${className}`} style={style} />
+function IngredientPhoto({ id, color, className = '' }: { id: string; color: string; className?: string }) {
+  return <span aria-hidden="true" className={`ingredient-photo ${className}`} style={spriteVars(id, color) as CSSProperties} />
 }
 
 function getLayerDetails(ingredientId: string, bun: BunId) {
   return fillings[ingredientId as FillingId] ?? buns[bun]
+}
+
+/** Tiny side view of a preset: one stripe per layer, top bun first. */
+function PresetGlyph({ presetId }: { presetId: PresetId }) {
+  const preset = presets.find((entry) => entry.id === presetId)!
+  const bun = buns[preset.bun]
+  const stripes = [bun.color, ...[...preset.ingredients].reverse().map((id) => fillings[id].color), bun.color]
+  return (
+    <span className="preset-glyph" aria-hidden="true">
+      {stripes.map((color, index) => (
+        <span key={index} style={{ background: color }} data-edge={index === 0 ? 'top' : index === stripes.length - 1 ? 'bottom' : undefined} />
+      ))}
+    </span>
+  )
 }
 
 function FlatPreview({
@@ -103,7 +117,7 @@ function FlatPreview({
 }
 
 function PreviewLoading() {
-  return <div className="scene-loading" role="status"><span />Menyiapkan panggangan…</div>
+  return <div className="scene-loading" role="status"><span />Menyalakan panggangan…</div>
 }
 
 export default function App() {
@@ -112,6 +126,7 @@ export default function App() {
   const [category, setCategory] = useState<Category>('patty')
   const [tab, setTab] = useState<Tab>('ingredients')
   const [selection, setSelection] = useState<string | null>(null)
+  const [hoverId, setHoverId] = useState<string | null>(null)
   const [exploded, setExploded] = useState(false)
   const [assemblyKey, setAssemblyKey] = useState(0)
   const [cameraCommand, setCameraCommand] = useState<CameraCommand | null>(null)
@@ -125,13 +140,18 @@ export default function App() {
   const layerDrag = useRef<LayerDrag | null>(null)
   const pendingFocus = useRef<PendingFocus | null>(null)
   const stackListRef = useRef<HTMLOListElement>(null)
+  const stageRef = useRef<HTMLElement>(null)
+  const rowTops = useRef(new Map<string, number>())
   const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({ ingredients: null, stack: null })
   const nameId = useId()
   const isMobile = useMediaQuery('(max-width: 1023px)')
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const layers = useMemo(() => getSceneLayers(draft), [draft])
+  const visualLayers = useMemo(() => [...layers].reverse(), [layers])
   const selectedId = layers.some((layer) => layer.id === selection) ? selection : null
+  const highlightId = hoverId && layers.some((layer) => layer.id === hoverId) ? hoverId : selectedId
   const items = category === 'bun' ? Object.values(buns) : Object.values(fillings).filter((item) => item.category === category)
+  const fillingCount = draft.fillings.length
   const counts = useMemo(() => {
     const result = new Map<string, number>()
     for (const { ingredientId } of draft.fillings) result.set(ingredientId, (result.get(ingredientId) ?? 0) + 1)
@@ -173,6 +193,27 @@ export default function App() {
     const timer = window.setTimeout(() => setPresetNotice(null), 7000)
     return () => window.clearTimeout(timer)
   }, [presetNotice])
+
+  // Slide rows from their old place to the new one, so a reorder in the list reads like the swap on the grill.
+  useLayoutEffect(() => {
+    const list = stackListRef.current
+    if (!list) return
+    const next = new Map<string, number>()
+    list.querySelectorAll<HTMLElement>('[data-row]').forEach((row) => {
+      const id = row.dataset.row!
+      const top = row.offsetTop
+      next.set(id, top)
+      const before = rowTops.current.get(id)
+      if (reducedMotion || before === undefined || tab !== 'stack') return
+      const delta = before - top
+      if (Math.abs(delta) < 1) return
+      row.animate(
+        [{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }],
+        { duration: 340, easing: 'cubic-bezier(.2, .9, .25, 1.06)' },
+      )
+    })
+    rowTops.current = next
+  }, [visualLayers, tab, reducedMotion])
 
   // Restore keyboard focus after a row moves or disappears, since re-ordering the DOM drops focus.
   useEffect(() => {
@@ -232,9 +273,8 @@ export default function App() {
 
   function handleSceneKeys(event: KeyboardEvent<HTMLDivElement>) {
     if (unavailable || event.target !== event.currentTarget) return
-    const action = ({ ArrowLeft: 'left', ArrowRight: 'right', '+': 'zoom-in', '=': 'zoom-in', '-': 'zoom-out', Home: 'reset' } as const)[
-      event.key as 'ArrowLeft' | 'ArrowRight' | '+' | '=' | '-' | 'Home'
-    ]
+    const map: Record<string, CameraCommand['action']> = { ArrowLeft: 'left', ArrowRight: 'right', '+': 'zoom-in', '=': 'zoom-in', '-': 'zoom-out', Home: 'reset' }
+    const action = map[event.key]
     if (!action) return
     event.preventDefault()
     sendCamera(action)
@@ -256,27 +296,55 @@ export default function App() {
     setAssemblyKey((value) => value + 1)
     setSelection(null)
     setExploded(false)
-    setPresetNotice({ id: Date.now(), text: `${preset.label} dipasang.`, undoable: true })
+    setPresetNotice({ id: Date.now(), text: `${preset.label} dipasang.` })
   }
 
-  function undoPreset() {
-    undo()
-    setPresetNotice(null)
+  /** Toss a copy of the ingredient photo onto the grill, so adding reads as one gesture. */
+  function flyToStage(source: HTMLElement | null, id: string, color: string) {
+    const stage = stageRef.current
+    if (!source || !stage || reducedMotion) return
+    const from = source.getBoundingClientRect()
+    const to = stage.getBoundingClientRect()
+    if (to.bottom < 40 || to.top > window.innerHeight - 40) return
+    const size = Math.min(from.width, 96)
+    const ghost = document.createElement('span')
+    ghost.className = 'ingredient-photo fly-ghost'
+    ghost.setAttribute('aria-hidden', 'true')
+    for (const [key, value] of Object.entries(spriteVars(id, color))) ghost.style.setProperty(key, value)
+    ghost.style.width = `${size}px`
+    ghost.style.left = `${from.left + (from.width - size) / 2}px`
+    ghost.style.top = `${from.top + (from.height - size) / 2}px`
+    document.body.appendChild(ghost)
+    const dx = to.left + to.width / 2 - (from.left + from.width / 2)
+    const dy = Math.max(to.top + 40, Math.min(to.bottom - 40, to.top + to.height * 0.42)) - (from.top + from.height / 2)
+    const animation = ghost.animate(
+      [
+        { transform: 'translate(0, 0) scale(1) rotate(0deg)', opacity: 1 },
+        { transform: `translate(${dx * 0.55}px, ${dy * 0.55 - 60}px) scale(.85) rotate(-8deg)`, opacity: 1, offset: 0.55 },
+        { transform: `translate(${dx}px, ${dy}px) scale(.3) rotate(-14deg)`, opacity: 0 },
+      ],
+      { duration: 540, easing: 'cubic-bezier(.3, .7, .35, 1)' },
+    )
+    animation.onfinish = () => ghost.remove()
+    animation.oncancel = () => ghost.remove()
   }
 
-  function chooseIngredient(id: BunId | FillingId) {
+  function chooseIngredient(id: BunId | FillingId, event: ReactMouseEvent<HTMLButtonElement>) {
+    const photo = event.currentTarget.querySelector<HTMLElement>('.ingredient-photo')
     if (category === 'bun') {
+      if (draft.bun === id) return
       const bun = buns[id as BunId]
       dispatch({ type: 'bun', bun: id as BunId })
-      setSelection('bun-top')
+      flyToStage(photo, id, bun.color)
       setAddNotice({ id: Date.now(), text: `${bun.label} dipakai` })
       return
     }
     const ingredient = fillings[id as FillingId]
     const nextCount = (counts.get(id) ?? 0) + 1
     dispatch({ type: 'add', layer: { id: newLayerId(), ingredientId: id as FillingId } })
+    flyToStage(photo, id, ingredient.color)
     setPulse((previous) => ({ id, serial: (previous?.serial ?? 0) + 1 }))
-    setAddNotice({ id: Date.now(), text: nextCount > 1 ? `${ingredient.label} ditambahkan · ${nextCount}×` : `${ingredient.label} ditambahkan` })
+    setAddNotice({ id: Date.now(), text: nextCount > 1 ? `${ingredient.label} ditambahkan, sekarang ${nextCount}` : `${ingredient.label} ditambahkan` })
   }
 
   function moveLayer(id: string, direction: 'up' | 'down') {
@@ -286,10 +354,10 @@ export default function App() {
 
   function removeLayer(id: string) {
     const index = draft.fillings.findIndex((layer) => layer.id === id)
-    // Focus the layer that takes its visual place: the one above it, otherwise the one below.
     const neighbour = draft.fillings[index + 1] ?? draft.fillings[index - 1]
     pendingFocus.current = neighbour ? { id: neighbour.id, control: 'select' } : { id: null, control: 'list' }
     if (selection === id) setSelection(null)
+    if (hoverId === id) setHoverId(null)
     dispatch({ type: 'remove', id })
   }
 
@@ -311,6 +379,7 @@ export default function App() {
     if (event.button !== 0 || !event.isPrimary) return
     layerDrag.current = { id, pointerId: event.pointerId, startY: event.clientY }
     event.currentTarget.setPointerCapture(event.pointerId)
+    setHoverId(id)
   }
 
   function getDropTarget(event: PointerEvent<HTMLSpanElement>, drag: LayerDrag): DropTarget | null {
@@ -337,17 +406,15 @@ export default function App() {
     if (target) dispatch({ type: 'drop', id: drag.id, targetId: target.id, placement: target.side === 'above' ? 'after' : 'before' })
     layerDrag.current = null
     setDropTarget(null)
+    setHoverId(null)
   }
-
-  const visualLayers = [...layers].reverse()
-  const fillingCount = draft.fillings.length
 
   return (
     <div className="app">
       <header className="topbar">
         <a className="wordmark" href="#" aria-label="Bunforge, kembali ke awal">
           <img src="/brand/bunforge-mark.png" alt="" width={30} height={30} />
-          <span>BUN<b>FORGE</b></span>
+          <span>Bunforge</span>
         </a>
         <div className="history" role="group" aria-label="Riwayat perubahan">
           <button type="button" className="history-button" disabled={!editor.past.length} onClick={undo}
@@ -362,9 +429,11 @@ export default function App() {
       </header>
 
       <main className="workspace">
-        <h1 className="page-title">Rakit Burger <em>Versimu.</em></h1>
+        <h1 className="page-title">
+          <span>Rakit Burger</span> <span>Versimu.</span>
+        </h1>
 
-        <section className="stage" aria-label="Panggung burger">
+        <section className="stage" aria-label="Panggung burger" ref={stageRef}>
           <div
             className="stage-viewport"
             tabIndex={unavailable ? undefined : 0}
@@ -372,10 +441,10 @@ export default function App() {
             aria-label={unavailable ? 'Pratinjau 2D burger' : 'Pratinjau 3D burger. Panah kiri dan kanan untuk memutar, plus dan minus untuk zoom.'}
           >
             {unavailable ? (
-              <FlatPreview layers={layers} bun={draft.bun} exploded={exploded} selectedId={selectedId} onSelect={selectFromScene} />
+              <FlatPreview layers={layers} bun={draft.bun} exploded={exploded} selectedId={highlightId} onSelect={selectFromScene} />
             ) : (
               <Suspense fallback={<PreviewLoading />}>
-                <BurgerScene layers={layers} selectedId={selectedId} onSelect={selectFromScene}
+                <BurgerScene layers={layers} selectedId={highlightId} onSelect={selectFromScene}
                   exploded={exploded} cameraCommand={cameraCommand} assemblyKey={assemblyKey}
                   reducedMotion={reducedMotion} isMobile={isMobile} onUnavailable={selectUnavailable} />
               </Suspense>
@@ -383,8 +452,8 @@ export default function App() {
           </div>
 
           <p className="stage-caption">
-            <span className="stage-caption-name">{draft.name.trim() || buns[draft.bun].label}</span>
-            <span>{fillingCount} isian{unavailable ? ' · mode 2D' : ''}</span>
+            <span className="stage-caption-name">{draft.name.trim() || 'Burger tanpa nama'}</span>
+            <span className="stage-caption-meta">{buns[draft.bun].label}, {fillingCount} isian{unavailable ? ', mode 2D' : ''}</span>
           </p>
 
           <div className="stage-controls">
@@ -394,7 +463,6 @@ export default function App() {
             </button>
             {!unavailable && (
               <div className="camera-group" role="group" aria-label="Kamera">
-                <span className="camera-hint">Seret untuk memutar</span>
                 <button type="button" aria-label="Putar ke kiri" title="Putar ke kiri" onClick={() => sendCamera('left')}><ChevronLeft size={18} aria-hidden="true" /></button>
                 <button type="button" aria-label="Putar ke kanan" title="Putar ke kanan" onClick={() => sendCamera('right')}><ChevronRight size={18} aria-hidden="true" /></button>
                 <span className="camera-divider" aria-hidden="true" />
@@ -405,35 +473,34 @@ export default function App() {
               </div>
             )}
           </div>
+          {!unavailable && <p className="stage-hint" aria-hidden="true">Seret burger untuk memutar</p>}
         </section>
 
         <section className="editor" aria-label="Editor burger">
           <div className="presets">
-            <h2 className="eyebrow" id="presets-title">Mulai cepat</h2>
-            <div className="preset-row" role="group" aria-labelledby="presets-title">
+            <div className="preset-row" role="group" aria-label="Mulai dari resep">
               {presets.map((preset) => {
                 const active = activePreset?.id === preset.id
                 return (
                   <button key={preset.id} type="button" className="preset" aria-pressed={active} onClick={() => applyPreset(preset.id)}>
-                    {active && <Check size={14} strokeWidth={3} aria-hidden="true" />}
-                    {preset.label}
+                    <PresetGlyph presetId={preset.id} />
+                    <span className="preset-label">{preset.label}</span>
+                    {active && <Check className="preset-check" size={15} strokeWidth={3} aria-hidden="true" />}
                   </button>
                 )
               })}
             </div>
             <div className="preset-notice" role="status">
               {presetNotice && (
-                <>
-                  <span>{presetNotice.text}</span>
-                  {presetNotice.undoable && editor.past.length > 0 && (
-                    <button type="button" className="text-button" onClick={undoPreset}>Batalkan</button>
-                  )}
-                </>
+                <span key={presetNotice.id} className="notice">
+                  {presetNotice.text}
+                  {editor.past.length > 0 && <button type="button" className="text-button" onClick={() => { undo(); setPresetNotice(null) }}>Batalkan</button>}
+                </span>
               )}
             </div>
           </div>
 
-          <div className="tabs" role="tablist" aria-label="Panel editor" onKeyDown={handleTabKeys}>
+          <div className="tabs" role="tablist" aria-label="Panel editor" data-active={tab} onKeyDown={handleTabKeys}>
             <button
               ref={(node) => { tabRefs.current.ingredients = node }}
               type="button" role="tab" id="tab-ingredients" aria-controls="panel-ingredients"
@@ -451,151 +518,157 @@ export default function App() {
               Susunan
               <span className="tab-count" key={fillingCount} aria-label={`${fillingCount} isian`}>{fillingCount}</span>
             </button>
+            <span className="tab-indicator" aria-hidden="true" />
           </div>
 
           <div className="panels">
-            <div className="panel" role="tabpanel" id="panel-ingredients" aria-labelledby="tab-ingredients" hidden={tab !== 'ingredients'}>
+            <div className="panel panel--ingredients" role="tabpanel" id="panel-ingredients" aria-labelledby="tab-ingredients" hidden={tab !== 'ingredients'}>
               <div className="categories" role="group" aria-label="Kategori bahan">
                 {categories.map((option) => {
                   const used = option === 'bun' ? 0 : categoryCounts.get(option) ?? 0
                   return (
                     <button key={option} type="button" className="category" aria-pressed={category === option} onClick={() => setCategory(option)}>
                       {categoryLabels[option]}
-                      {used > 0 && <span className="category-count" aria-label={`, ${used} dipakai`}>{used}</span>}
+                      {used > 0 && <span className="category-count"><span className="visually-hidden">, dipakai </span>{used}</span>}
                     </button>
                   )
                 })}
               </div>
 
-              <div className="add-notice" role="status" aria-live="polite">
-                {addNotice && <span key={addNotice.id}><Check size={14} aria-hidden="true" /> {addNotice.text}</span>}
-              </div>
-
-              <ul className="catalog">
-                {items.map((item) => {
+              <ul className="tray" aria-label={`Bahan ${categoryLabels[category]}`}>
+                {items.map((item, index) => {
                   const isBun = category === 'bun'
                   const chosen = isBun && draft.bun === item.id
                   const count = isBun ? 0 : counts.get(item.id) ?? 0
+                  const label = isBun
+                    ? chosen ? `${item.label}, sedang dipakai` : `Pakai ${item.label}`
+                    : `Tambah ${item.label}${count ? `, sudah ${count}` : ''}`
                   return (
-                    <li key={item.id} className="catalog-item" data-chosen={chosen || undefined}>
-                      <IngredientPhoto id={item.id} color={item.color} />
-                      <div className="catalog-text">
-                        <span className="catalog-name">
-                          {item.label}
+                    <li key={item.id} style={{ '--i': index } as CSSProperties}>
+                      <button type="button" className="tile" data-chosen={chosen || undefined} aria-pressed={isBun ? chosen : undefined}
+                        aria-label={label} onClick={(event) => chooseIngredient(item.id, event)}>
+                        <span className="tile-photo">
+                          <IngredientPhoto id={item.id} color={item.color} />
                           {count > 0 && (
-                            <span className="catalog-count" key={pulse?.id === item.id ? pulse.serial : 'count'} data-pulse={pulse?.id === item.id || undefined}>
-                              {count}× dipakai
+                            <span className="tile-count" key={pulse?.id === item.id ? pulse.serial : 'count'} data-pulse={pulse?.id === item.id || undefined} aria-hidden="true">
+                              {count}
                             </span>
                           )}
-                          {chosen && <span className="catalog-count">Dipakai</span>}
+                          {(!isBun || chosen) && (
+                            <span className="tile-action" aria-hidden="true">
+                              {isBun ? <Check size={16} strokeWidth={3} /> : <Plus size={17} strokeWidth={2.6} />}
+                            </span>
+                          )}
                         </span>
-                        <span className="catalog-description">{item.description}</span>
-                      </div>
-                      {isBun ? (
-                        <button type="button" className="add-button" data-variant={chosen ? 'chosen' : 'pick'} aria-pressed={chosen}
-                          aria-label={chosen ? `${item.label} sedang dipakai` : `Pakai ${item.label}`} onClick={() => chooseIngredient(item.id)}>
-                          {chosen ? <><Check size={16} aria-hidden="true" /> Terpasang</> : 'Pakai'}
-                        </button>
-                      ) : (
-                        <button type="button" className="add-button" aria-label={`Tambah ${item.label}`} onClick={() => chooseIngredient(item.id)}>
-                          <Plus size={16} aria-hidden="true" /> Tambah
-                        </button>
-                      )}
+                        <span className="tile-name">{item.label}</span>
+                        <span className="tile-description">{chosen ? 'Sedang dipakai' : item.description}</span>
+                      </button>
                     </li>
                   )
                 })}
               </ul>
+
+              <div className="add-notice" role="status" aria-live="polite">
+                {addNotice && <span key={addNotice.id} className="notice"><Check size={14} aria-hidden="true" /> {addNotice.text}</span>}
+              </div>
             </div>
 
-            <div className="panel" role="tabpanel" id="panel-stack" aria-labelledby="tab-stack" hidden={tab !== 'stack'}>
-              <p className="stack-help">
-                Urutan sama dengan burger: paling atas di sini adalah roti atas. Seret <GripVertical size={13} aria-hidden="true" /> atau pakai panah untuk memindahkan.
-              </p>
-              <ol className="stack" ref={stackListRef} tabIndex={-1} aria-label="Lapisan burger, dari atas ke bawah">
-                {visualLayers.map((layer) => {
-                  const position = layers.indexOf(layer)
-                  const isBottom = position === 0
-                  const isTop = position === layers.length - 1
-                  const isBun = isBottom || isTop
-                  const ingredient = getLayerDetails(layer.ingredientId, draft.bun)
-                  const selected = selectedId === layer.id
-                  const dropSide = dropTarget?.id === layer.id ? dropTarget.side : undefined
-                  return (
-                    <li
-                      key={layer.id}
-                      className="layer"
-                      data-row={layer.id}
-                      data-bun={isBun || undefined}
-                      data-selected={selected || undefined}
-                      data-drop={dropSide}
-                      data-filling-layer={isBun ? undefined : layer.id}
-                      onKeyDown={isBun ? undefined : (event) => handleRowKeys(event, layer.id)}
-                    >
-                      <span className="layer-index" aria-hidden="true">{position + 1}</span>
-                      {isBun ? <span className="layer-grip layer-grip--fixed" aria-hidden="true" /> : (
-                        <span className="layer-grip" title="Seret untuk memindahkan"
-                          onPointerDown={(event) => startLayerDrag(event, layer.id)}
-                          onPointerMove={trackLayerDrag}
-                          onPointerUp={endLayerDrag}
-                          onPointerCancel={endLayerDrag}
-                          onLostPointerCapture={endLayerDrag}>
-                          <GripVertical size={16} aria-hidden="true" />
-                        </span>
-                      )}
-                      <button type="button" className="layer-select" data-control="select" data-layer={layer.id}
-                        aria-pressed={selected} onClick={() => setSelection(selected ? null : layer.id)}
-                        aria-label={`${ingredient.label}${isBun ? (isTop ? ', roti atas' : ', roti bawah') : `, lapisan ${position + 1}`}${selected ? ', disorot' : ''}`}>
-                        <IngredientPhoto id={ingredient.id} color={ingredient.color} />
-                        <span className="layer-name">
-                          {ingredient.label}
-                          {isBun && <small>{isTop ? 'Roti atas' : 'Roti bawah'}</small>}
-                        </span>
-                        {selected && <span className="layer-flag">Disorot</span>}
-                      </button>
-                      {!isBun && (
-                        <div className="layer-tools">
-                          <button type="button" data-control="up" data-layer={layer.id} aria-label={`Naikkan ${ingredient.label}`} title="Naikkan"
-                            disabled={position === layers.length - 2} onClick={() => moveLayer(layer.id, 'up')}><ArrowUp size={16} aria-hidden="true" /></button>
-                          <button type="button" data-control="down" data-layer={layer.id} aria-label={`Turunkan ${ingredient.label}`} title="Turunkan"
-                            disabled={position === 1} onClick={() => moveLayer(layer.id, 'down')}><ArrowDown size={16} aria-hidden="true" /></button>
-                          <button type="button" className="layer-delete" aria-label={`Hapus ${ingredient.label}`} title="Hapus"
-                            onClick={() => removeLayer(layer.id)}><Trash2 size={16} aria-hidden="true" /></button>
-                        </div>
-                      )}
-                    </li>
-                  )
-                })}
-              </ol>
-              {fillingCount === 0 && (
-                <div className="empty">
-                  <p>Belum ada isian di antara roti.</p>
-                  <button type="button" className="ghost-button" onClick={() => { setCategory('patty'); setTab('ingredients'); requestAnimationFrame(() => tabRefs.current.ingredients?.focus()) }}>
-                    Pilih patty pertama
+            <div className="panel panel--stack" role="tabpanel" id="panel-stack" aria-labelledby="tab-stack" hidden={tab !== 'stack'}>
+              <div className="ticket">
+                <label className="ticket-name" htmlFor={nameId}>
+                  <span>Nama burger</span>
+                  <input id={nameId} placeholder="Beri nama burgermu" value={draft.name} maxLength={80} autoComplete="off"
+                    onChange={(event) => dispatch({ type: 'name', name: event.target.value })} />
+                </label>
+
+                <p className="ticket-help">Paling atas adalah roti atas. Seret pegangan atau pakai panah untuk memindahkan lapisan.</p>
+
+                <ol className="stack" ref={stackListRef} tabIndex={-1} aria-label="Lapisan burger, dari atas ke bawah"
+                  onMouseLeave={() => { if (!layerDrag.current) setHoverId(null) }}>
+                  {visualLayers.map((layer) => {
+                    const position = layers.indexOf(layer)
+                    const isBottom = position === 0
+                    const isTop = position === layers.length - 1
+                    const isBun = isBottom || isTop
+                    const ingredient = getLayerDetails(layer.ingredientId, draft.bun)
+                    const selected = selectedId === layer.id
+                    const dropSide = dropTarget?.id === layer.id ? dropTarget.side : undefined
+                    return (
+                      <li
+                        key={layer.id}
+                        className="layer"
+                        data-row={layer.id}
+                        data-bun={isBun || undefined}
+                        data-selected={selected || undefined}
+                        data-hover={hoverId === layer.id || undefined}
+                        data-drop={dropSide}
+                        data-filling-layer={isBun ? undefined : layer.id}
+                        onMouseEnter={() => { if (!layerDrag.current) setHoverId(layer.id) }}
+                        onKeyDown={isBun ? undefined : (event) => handleRowKeys(event, layer.id)}
+                      >
+                        <span className="layer-index" aria-hidden="true">{position + 1}</span>
+                        {isBun ? <span className="layer-grip layer-grip--fixed" aria-hidden="true" /> : (
+                          <span className="layer-grip" title="Seret untuk memindahkan"
+                            onPointerDown={(event) => startLayerDrag(event, layer.id)}
+                            onPointerMove={trackLayerDrag}
+                            onPointerUp={endLayerDrag}
+                            onPointerCancel={endLayerDrag}
+                            onLostPointerCapture={endLayerDrag}>
+                            <GripVertical size={16} aria-hidden="true" />
+                          </span>
+                        )}
+                        <button type="button" className="layer-select" data-control="select" data-layer={layer.id}
+                          aria-pressed={selected} onClick={() => setSelection(selected ? null : layer.id)}
+                          onFocus={() => setHoverId(layer.id)} onBlur={() => setHoverId(null)}
+                          aria-label={`${ingredient.label}${isBun ? (isTop ? ', roti atas' : ', roti bawah') : `, lapisan ${position + 1}`}${selected ? ', disorot' : ''}`}>
+                          <IngredientPhoto id={ingredient.id} color={ingredient.color} />
+                          <span className="layer-name">
+                            {ingredient.label}
+                            {isBun && <small>{isTop ? 'Roti atas' : 'Roti bawah'}</small>}
+                          </span>
+                          {selected && <span className="layer-flag">Disorot</span>}
+                        </button>
+                        {!isBun && (
+                          <div className="layer-tools">
+                            <button type="button" data-control="up" data-layer={layer.id} aria-label={`Naikkan ${ingredient.label}`} title="Naikkan"
+                              disabled={position === layers.length - 2} onClick={() => moveLayer(layer.id, 'up')}><ArrowUp size={16} aria-hidden="true" /></button>
+                            <button type="button" data-control="down" data-layer={layer.id} aria-label={`Turunkan ${ingredient.label}`} title="Turunkan"
+                              disabled={position === 1} onClick={() => moveLayer(layer.id, 'down')}><ArrowDown size={16} aria-hidden="true" /></button>
+                            <button type="button" className="layer-delete" aria-label={`Hapus ${ingredient.label}`} title="Hapus"
+                              onClick={() => removeLayer(layer.id)}><Trash2 size={16} aria-hidden="true" /></button>
+                          </div>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ol>
+
+                {fillingCount === 0 && (
+                  <div className="empty">
+                    <p>Belum ada isian di antara roti.</p>
+                    <button type="button" className="ghost-button" onClick={() => { setCategory('patty'); setTab('ingredients'); requestAnimationFrame(() => tabRefs.current.ingredients?.focus()) }}>
+                      Pilih patty pertama
+                    </button>
+                  </div>
+                )}
+
+                <div className="ticket-foot">
+                  <button type="button" className="primary-button" onClick={copyRecipe}>
+                    {copied === 'copied' ? <Check size={17} aria-hidden="true" /> : <Copy size={17} aria-hidden="true" />}
+                    {copied === 'copied' ? 'Susunan disalin' : 'Salin Susunan'}
                   </button>
+                  <div className="ticket-meta">
+                    <span className="draft-status" role="status">
+                      {copied === 'error' ? 'Gagal menyalin. Izinkan akses papan klip di browser.' : storageWorks ? 'Draf tersimpan otomatis' : 'Draf tidak bisa disimpan di browser ini'}
+                    </span>
+                    <button type="button" className="text-button text-button--ink" disabled={!fillingCount} onClick={() => {
+                      dispatch({ type: 'reset' })
+                      setSelection(null)
+                      setExploded(false)
+                    }}><RotateCcw size={13} aria-hidden="true" /> Kosongkan isian</button>
+                  </div>
                 </div>
-              )}
-            </div>
-          </div>
-
-          <div className="finish">
-            <label className="name-field" htmlFor={nameId}>
-              <span>Nama burger</span>
-              <input id={nameId} placeholder="Smash Buatanku" value={draft.name} maxLength={80} autoComplete="off"
-                onChange={(event) => dispatch({ type: 'name', name: event.target.value })} />
-            </label>
-            <button type="button" className="primary-button" onClick={copyRecipe}>
-              {copied === 'copied' ? <Check size={17} aria-hidden="true" /> : <Copy size={17} aria-hidden="true" />}
-              {copied === 'copied' ? 'Tersalin' : 'Salin Susunan'}
-            </button>
-            <div className="finish-meta">
-              <span className="draft-status" role="status">
-                {copied === 'error' ? 'Gagal menyalin. Izinkan akses papan klip.' : storageWorks ? 'Draf tersimpan otomatis' : 'Draf tidak bisa disimpan di browser ini'}
-              </span>
-              <button type="button" className="text-button" disabled={!fillingCount} onClick={() => {
-                dispatch({ type: 'reset' })
-                setSelection(null)
-                setExploded(false)
-              }}><RotateCcw size={13} aria-hidden="true" /> Kosongkan isian</button>
+              </div>
             </div>
           </div>
         </section>
